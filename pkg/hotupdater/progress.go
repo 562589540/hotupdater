@@ -39,6 +39,7 @@ var PhaseMessages = map[UpdatePhase]string{
 type UpdateProgress struct {
 	Phase      UpdatePhase `json:"phase"`      // 当前阶段
 	Percentage int         `json:"percentage"` // 总体进度百分比(0-100)
+	Speed      float64     `json:"speed"`      // 下载速度(MB/s)
 	Message    string      `json:"message"`    // 用户友好的提示信息
 	Detail     string      `json:"detail"`     // 详细信息(可选)
 }

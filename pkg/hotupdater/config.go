@@ -8,6 +8,7 @@ type Config struct {
 	OnUpdate     func(error)  // 更新回调
 	Logger       Logger       // 日志接口
 	EventEmitter EventEmitter // 事件发送器
+	DownloadImpl DownloadImplementation
 }
 
 // Logger 日志接口
@@ -40,5 +41,6 @@ func (c Config) Clone() Config {
 		OnUpdate:     c.OnUpdate,
 		Logger:       c.Logger,
 		EventEmitter: c.EventEmitter,
+		DownloadImpl: c.DownloadImpl,
 	}
 }

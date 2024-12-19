@@ -1,0 +1,31 @@
+# 二进制文件
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# 测试二进制文件
+*.test
+
+# 覆盖率测试输出
+*.out
+
+# 依赖目录
+/vendor/
+
+# IDE 相关
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+# 日志文件
+*.log
+
+# 环境变量文件
+.env 
