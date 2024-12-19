@@ -152,3 +152,137 @@ type UpdateProgress struct {
 ## 许可证
 
 MIT License
+
+## 平台特定说明
+
+### macOS 更新助手
+
+macOS 平台需要使用专门的更新助手程序来处理 .app 包的更新。
+
+#### 目录结构
+```
+YourApp.app/
+└── Contents/
+    └── Resources/
+        ├── updater     # macOS更新助手程序
+        └── update.lua  # 更新脚本
+```
+
+#### 构建脚本示例
+```bash
+#!/bin/bash
+# 设置变量
+APP_NAME="your_app_name"
+BUILD_DIR="build/bin"
+RESOURCES_DIR="$BUILD_DIR/$APP_NAME.app/Contents/Resources"
+APP_DEST="/Applications/$APP_NAME.app"
+
+# 构建更新助手
+go build -o updater cmd/updater/main.go
+
+# 创建资源目录
+mkdir -p "$RESOURCES_DIR"
+
+# 复制更新助手和脚本
+cp updater "$RESOURCES_DIR/"
+cp update.lua "$RESOURCES_DIR/"
+
+# 设置权限
+chmod +x "$RESOURCES_DIR/updater"
+chmod 644 "$RESOURCES_DIR/update.lua"
+```
+
+### 路径说明
+
+#### macOS
+- 更新助手位置: `/Applications/YourApp.app/Contents/Resources/updater`
+- 脚本相对路径: 相对于更新助手所在目录
+- 示例: `ScriptPath: "./update.lua"` 指向 `/Applications/YourApp.app/Contents/Resources/update.lua`
+
+#### Windows
+- 脚本相对路径: 相对于主程序执行文件
+- 示例: `ScriptPath: "./update.lua"` 指向与可执行文件同级目录
+```
+C:/path/to/
+├── your.exe
+└── update.lua
+```
+
+#### 目录结构示例
+
+##### Windows
+```
+C:/path/to/
+├── your.exe          # 主程序
+├── update.lua        # 更新脚本
+└── resources/        # 资源目录
+    └── ...
+```
+
+##### macOS
+```
+/Applications/
+└── YourApp.app/
+    └── Contents/
+        ├── MacOS/
+        │   └── YourApp    # 主程序
+        └── Resources/
+            ├── updater    # 更新助手
+            ├── update.lua # 更新脚本
+            └── ...
+```
+
+### 最佳实践
+```go
+config := hotupdater.Config{
+    // ... 其他配置 ...
+    ScriptPath: "/absolute/path/to/update.lua", // 建议使用绝对路径
+}
+```
+
+> **注意**: 建议使用绝对路径来避免不同平台的路径解析问题。如果必须使用相对路径，请注意 macOS 和 Windows 的基准路径差异。
+
+## 构建说明
+
+### macOS 构建步骤
+
+1. 构建主程序（如果使用 Wails）:
+```bash
+wails build
+```
+
+2. 构建更新助手:
+```bash
+go build -o updater cmd/updater/main.go
+```
+
+3. 创建应用程序包结构:
+```bash
+mkdir -p "build/bin/YourApp.app/Contents/Resources"
+```
+
+4. 复制必要文件:
+```bash
+cp updater "build/bin/YourApp.app/Contents/Resources/"
+cp update.lua "build/bin/YourApp.app/Contents/Resources/"
+```
+
+5. 设置权限:
+```bash
+chmod +x "build/bin/YourApp.app/Contents/Resources/updater"
+chmod 644 "build/bin/YourApp.app/Contents/Resources/update.lua"
+```
+
+完整的构建脚本请参考项目中的 `build.sh`。
+
+### Windows 构建步骤
+
+Windows 平台不需要特殊的更新助手，直接构建主程序即可：
+
+```bash
+go build
+# 或者如果使用 Wails
+wails build
+```
+
+确保 `update.lua` 脚本放在正确的相对路径下。

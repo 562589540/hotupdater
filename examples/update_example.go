@@ -58,6 +58,14 @@ func (l *CustomLogger) Logf(format string, args ...interface{}) {
 }
 
 func main() {
+	//mac
+	//mac助手打包后放在/Applications/your.app/Contents/Resources
+	//ScriptPath 相对路径 相对于mac助手的路径
+
+	//win
+	//ScriptPath 相对路径 相对于/path/to/your.exe
+
+	//ScriptPath 建议使用绝对路径 避免路径问题
 	ctx := context.Background()
 
 	// 创建配置
