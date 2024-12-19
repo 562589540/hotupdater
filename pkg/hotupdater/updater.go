@@ -33,16 +33,16 @@ func New(config Config, ctx context.Context) Updater {
 	return newPlatformUpdater(config, ctx)
 }
 
-type fastUpdater struct {
+type FastUpdater struct {
 	config  Config
 	ctx     context.Context
 	updater Updater
 }
 
 // NewFastUpdate 快速更新
-func NewFastUpdate(config Config, ctx context.Context) *fastUpdater {
+func NewFastUpdate(config Config, ctx context.Context) *FastUpdater {
 	updater := New(config, ctx)
-	return &fastUpdater{
+	return &FastUpdater{
 		config:  config,
 		ctx:     ctx,
 		updater: updater,
@@ -50,7 +50,7 @@ func NewFastUpdate(config Config, ctx context.Context) *fastUpdater {
 }
 
 // Update 方法中添加下载阶段
-func (f *fastUpdater) Update(newAppPath string, WindowHide func(ctx context.Context)) error {
+func (f *FastUpdater) Update(newAppPath string, WindowHide func(ctx context.Context)) error {
 	defer f.updater.Close()
 
 	// 如果提供了下载实现，执行下载
