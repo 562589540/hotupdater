@@ -71,7 +71,8 @@ func (m *MacUpdater) Update(newVersion string) error {
 	}
 	m.sendLog("更新助手存在")
 
-	scriptPath := filepath.Join(resourcesDir, "update.lua")
+	//scriptPath := filepath.Join(resourcesDir, "update.lua")
+	scriptPath := m.config.ScriptPath
 	m.sendLog("更新脚本路径: %s", scriptPath)
 	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
 		m.sendLog("更新脚本不存在: %s", scriptPath)

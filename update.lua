@@ -1,4 +1,16 @@
--- update.lua
+-- 全局配置
+local g_config = {
+    windows_updater = {
+        use_gui = false,  -- 是否使用GUI更新助手
+        updater_path = "updater.exe"  -- 更新助手的相对路径
+    }
+}
+
+-- 全局变量用于存储更新路径
+local g_update_path = nil
+local g_write_log_file = false  -- 控制是否写入日志文件
+
+
 -- 检测操作系统类型
 local function is_windows()
     return package.config:sub(1,1) == '\\'
@@ -6,10 +18,6 @@ end
 
 -- 路径分隔符
 local path_sep = is_windows() and '\\' or '/'
-
--- 全局变量用于存储更新路径
-local g_update_path = nil
-local g_write_log_file = false  -- 控制是否写入日志文件
 
 -- Windows 特定的函数
 local function win_hide_window(cmd)
@@ -282,7 +290,7 @@ end
 -- 删除文件或目录
 local function remove_files(path)
     if is_windows() then
-        -- 检查文���是否存在
+        -- 检查文件是否存在
         local check_cmd = string.format('Test-Path "%s"', path)
         log("检查待删除文件命令: " .. check_cmd)
         local exists = os_execute(check_cmd)
@@ -340,32 +348,279 @@ local function remove_files(path)
     end
 end
 
--- macOS 特定的函数
-local function remove_quarantine(path)
-    if not is_windows() then
-        -- 移除隔离属性
-        local success = os.execute(string.format('xattr -rd com.apple.quarantine "%s"', path))
-        if not success then
-            log("移除隔离属性失败: " .. path)
-            return false
+-- 执行命令并返回输出
+local function execute_command(cmd)
+    log_message("执行命令: " .. cmd)
+    local handle = io.popen(cmd .. " 2>&1")
+    if not handle then
+        log_message("命令执行失败: 无法创建进程")
+        return nil
+    end
+    
+    local result = handle:read("*a")
+    local success, exit_type, exit_code = handle:close()
+    
+    if not success then
+        log_message(string.format("命令执行失败: %s (exit_type=%s, exit_code=%s)", 
+            result or "无输出", exit_type or "unknown", exit_code or "unknown"))
+        return nil
+    end
+    
+    log_message("命令执行成功，输出: " .. (result or "无"))
+    return result
+end
+
+-- 添加超时执行函数
+local function execute_with_timeout(cmd, timeout)
+    log_message(string.format("开始执行命令(超时=%d秒): %s", timeout, cmd))
+    
+    local done = false
+    local result = nil
+    local start_time = os.time()
+    
+    -- 在新线程中执行命令
+    local co = coroutine.create(function()
+        local handle = io.popen(cmd .. " 2>&1")
+        if not handle then
+            log_message("命令执行失败: 无法创建进程")
+            result = nil
+            done = true
+            return
         end
         
-        -- 移除其他扩展属性
-        success = os.execute(string.format('xattr -rc "%s"', path))
+        result = handle:read("*a")
+        local success, exit_type, exit_code = handle:close()
+        
         if not success then
-            log("移除扩展属性失败: " .. path)
-            return false
+            log_message(string.format("命令执行失败: %s (exit_type=%s, exit_code=%s)", 
+                result or "无输出", exit_type or "unknown", exit_code or "unknown"))
+            result = nil
         end
         
-        -- 修复权限
-        success = os.execute(string.format('chmod -R 755 "%s"', path))
-        if not success then
-            log("修复权限失败: " .. path)
-            return false
-        end
-        
+        done = true
+    end)
+    coroutine.resume(co)
+    
+    -- 等待完成或超时
+    while not done and os.time() - start_time < timeout do
+        os.execute("sleep 1")
+    end
+    
+    if not done then
+        log_message(string.format("命令执行超时: %s", cmd))
+        -- 尝试杀死可能卡住的进程
+        os.execute("pkill -f xattr")
+        os.execute("pkill -f spctl")
+        return false, "timeout"
+    end
+    
+    if result == nil then
+        return false, "execution_failed"
+    end
+    
+    log_message("命令执行成功，输出: " .. (result or "无"))
+    return true, result
+end
+
+-- 检查是否存在隔离属性
+local function check_quarantine(path)
+    log_message("开始检查隔离属性: " .. path)
+    
+    -- 先检查文件是否存在
+    if not execute_command(string.format('test -e "%s"', path)) then
+        log_message("错误: 文件不存在: " .. path)
         return true
     end
+    
+    -- 检查是否有权限访问文件
+    if not execute_command(string.format('test -r "%s"', path)) then
+        log_message("错误: 无法访问文件: " .. path)
+        return true
+    end
+    
+    local success, output = execute_with_timeout(string.format('xattr -l "%s"', path), 5)
+    if not success then
+        log_message("检查隔离属性失败: " .. (output or "未知错误"))
+        return true -- 如果检查失败，认为可能存在问题
+    end
+    
+    -- 打印所有属性以便分析
+    log_message("当前路径: " .. path)
+    log_message("所有扩展属性:")
+    log_message(output or "无")
+    
+    -- 只检查真正影响运行的隔离属性
+    local critical_attrs = {
+        "com.apple.quarantine"  -- 只检查这个关键属性
+    }
+    
+    -- 记录所有发现的属性，但只对关键属性报错
+    local found_attrs = {}
+    for _, attr in ipairs(critical_attrs) do
+        if output:find(attr) then
+            table.insert(found_attrs, attr)
+        end
+    end
+    
+    -- 如果发现非关键属性，只记录不报错
+    if output:find("com.apple.provenance") then
+        log_message("注意: 发现 com.apple.provenance 属性，但这不影响应用运行")
+    end
+    if output:find("com.apple.macl") then
+        log_message("注意: 发现 com.apple.macl 属性，但这不影响应用运行")
+    end
+    
+    if #found_attrs > 0 then
+        log_message("发现以下关键隔离属性:")
+        for _, attr in ipairs(found_attrs) do
+            -- 获取具体属性值
+            local attr_value = execute_command(string.format('xattr -p "%s" "%s" 2>/dev/null', attr, path))
+            log_message(string.format("  %s: %s", attr, attr_value or ""))
+        end
+        return true
+    end
+    
+    -- 检查子目录中的关键属性
+    local success, output = execute_with_timeout(
+        string.format('find "%s" -type f -exec xattr -l {} \\;', path),
+        10
+    )
+    if success and output and output ~= "" then
+        log_message("子目录中的扩展属性:")
+        log_message(output)
+        
+        -- 只检查子目录中的关键属性
+        for _, attr in ipairs(critical_attrs) do
+            if output:find(attr) then
+                log_message("在子目录中发现关键隔离属性: " .. attr)
+                return true
+            end
+        end
+    end
+    
+    log_message("未发现影响运行的隔离属性")
+    return false
+end
+
+-- 修改 remove_quarantine 函数
+local function remove_quarantine(path)
+    log_message("开始移除安全属性: " .. path)
+    
+    -- 先检查文件是否存在和权限
+    if not execute_command(string.format('test -e "%s"', path)) then
+        log_message("错误: 文件不存在: " .. path)
+        return false
+    end
+    
+    if not execute_command(string.format('test -w "%s"', path)) then
+        log_message("错误: 无写入权限: " .. path)
+        return false
+    end
+    
+    -- 先打印初始状态
+    log_message("移除前的属性状态:")
+    local initial_attrs = execute_command(string.format('xattr -l "%s" 2>&1', path))
+    log_message(initial_attrs or "无")
+    
+    -- 1. 尝试使用 -c 参数清除所有属性
+    log_message("尝试使用 xattr -c 清除所有属性")
+    local success, output = execute_with_timeout(
+        string.format('xattr -c "%s" 2>&1', path),
+        10
+    )
+    if not success then
+        log_message("xattr -c 失败，尝试其他方法")
+        log_message("错误输出: " .. (output or "无"))
+    end
+    
+    -- 2. 尝试逐个移除特定属性
+    local attrs = {
+        "com.apple.macl",
+        "com.apple.provenance",
+        "com.apple.quarantine"
+    }
+    
+    for _, attr in ipairs(attrs) do
+        log_message("尝试移除属性: " .. attr)
+        -- 先尝试普通移除
+        local success, output = execute_with_timeout(
+            string.format('xattr -r -d %s "%s" 2>&1', attr, path),
+            10
+        )
+        if not success then
+            log_message(string.format("普通移除失败: %s", attr))
+            -- 尝试使用 sudo
+            success, output = execute_with_timeout(
+                string.format('sudo xattr -r -d %s "%s" 2>&1', attr, path),
+                10
+            )
+            if not success then
+                log_message(string.format("sudo 移除也失败: %s", attr))
+                log_message("错误输出: " .. (output or "无"))
+            end
+        end
+    end
+    
+    -- 3. 递归处理子目录
+    log_message("处理子目录...")
+    success, output = execute_with_timeout(
+        string.format('find "%s" -type f -exec xattr -c {} \\;', path),
+        30
+    )
+    if not success then
+        log_message("处理子目录失败")
+        log_message("错误输出: " .. (output or "无"))
+    end
+    
+    -- 4. 修复权限
+    success, output = execute_with_timeout(
+        string.format('chmod -R 755 "%s"', path),
+        10
+    )
+    if not success then
+        log_message("修复权限失败")
+        log_message("错误输出: " .. (output or "无"))
+        return false
+    end
+    
+    -- 5. 特别处理可执行文件
+    local macosPath = path .. "/Contents/MacOS"
+    -- 先检查目录是否存在
+    if execute_command(string.format('test -d "%s"', macosPath)) then
+        success, output = execute_with_timeout(
+            string.format('find "%s" -type f -exec chmod +x {} \\;', macosPath),
+            5
+        )
+        if not success then
+            log_message("设置可执行权限失败")
+            log_message("错误输出: " .. (output or "无"))
+            log_message("继续执行...")
+        end
+    else
+        log_message("MacOS 目录不存在，跳过设置可执行权限")
+    end
+    
+    -- 6. 最终验证
+    log_message("最终属性状态:")
+    local final_attrs = execute_command(string.format('xattr -l "%s"', path))
+    if final_attrs and final_attrs ~= "" then
+        log_message("警告: 仍存在以下属性:")
+        log_message(final_attrs)
+        -- 对于顽固的属性，尝试使用 -c 强制清除
+        success, output = execute_with_timeout(
+            string.format('sudo xattr -c "%s" 2>&1', path),
+            10
+        )
+        if not success then
+            log_message("最终清除失败")
+            log_message("错误输出: " .. (output or "无"))
+            return false
+        end
+    else
+        log_message("所有属性已清除")
+    end
+    
+    log_message("安全属性移除完成")
     return true
 end
 
@@ -387,8 +642,16 @@ local function create_update_batch(src, dst, backup)
         -- 尝试删除旧文件
         file:write(string.format('del /f /q "%s"\n', dst))
         
-        -- 复制新文件
+        -- 复制新文件并立即检查结果
         file:write(string.format('copy /y "%s" "%s"\n', src, dst))
+        
+        -- 检查文件是否存在
+        file:write(string.format('if not exist "%s" (\n', dst))
+        -- 从备份恢复
+        file:write(string.format('    copy /y "%s" "%s"\n', backup, dst))
+        file:write(string.format('    start "" "%s"\n', dst))
+        file:write('    exit /b 1\n')
+        file:write(')\n')
         
         -- 启动新版本
         file:write(string.format('start "" "%s"\n', dst))
@@ -404,7 +667,90 @@ function send_progress(phase, percentage, detail)
     log_message(string.format("@PROGRESS@%s|%d|%s", phase, percentage, detail))
 end
 
--- 在关键操作点添加进度报告
+-- Windows更新处理函数
+local function perform_windows_update(target_path, new_version, backup_path, backup_file, app_root)
+    if g_config.windows_updater.use_gui then
+        -- 使用GUI更新助手
+        send_progress("install", 0, "准备安装新版本...")
+        
+        -- 创建更新信息文件
+        local info_file = g_update_path .. path_sep .. "update_info.json"
+        -- 转义路径中的反斜杠
+        local info_str = string.format([[{
+    "app_path": "%s",
+    "new_version": "%s",
+    "backup_path": "%s",
+    "backup_file": "%s"
+}]], target_path:gsub("\\", "\\\\"), 
+    new_version:gsub("\\", "\\\\"), 
+    backup_path:gsub("\\", "\\\\"), 
+    backup_file:gsub("\\", "\\\\"))
+
+        -- 写入文件
+        local file = io.open(info_file, "w")
+        if file then
+            file:write(info_str)
+            file:close()
+            log("已创建更新信息文件: " .. info_file)
+        else
+            error("创建更新信息文件失败")
+            return false
+        end
+        
+        -- 修改启动更新助手的方式
+        local updater_path = app_root .. path_sep .. g_config.windows_updater.updater_path
+        -- 使用 cmd /c start 来启动独立进程
+        local cmd = string.format(
+            'cmd /c start "" /b "%s" -update "%s"',
+            updater_path, 
+            info_file
+        )
+        if not os_execute(cmd) then
+            error("启动更新助手失败")
+            return false
+        end
+        
+        send_progress("install", 100, "更新助手已启动")
+        log("更新助手已启动，程序即将重启...")
+        return true
+    else
+        -- 使用批处理脚本
+        send_progress("install", 0, "准备安装新版本...")
+        
+        local batch_start = get_time()
+        send_progress("install", 20, "正在创建更新脚本...")
+        local batch_file = create_update_batch(new_version, target_path, backup_file)
+        log_time(batch_start, "创建批处理")
+        
+        -- 启动批处理
+        send_progress("install", 40, "正在准备重启程序...")
+        local start_start = get_time()
+        local cmd = string.format('powershell -Command "Start-Process -FilePath \'%s\' -WindowStyle Hidden"', batch_file)
+        local success = os_execute(cmd)
+        log_time(start_start, "启动批处理")
+        
+        if not success then
+            error("启动更新脚本失败")
+            return false
+        end
+        
+        send_progress("install", 80, "更新脚本已启动...")
+        log("更新脚本已创建并启动，程序即将重启...")
+        
+        -- 验证更新脚本
+        send_progress("verify", 0, "正在验证更新脚本...")
+        if check_file_exists(batch_file) then
+            send_progress("verify", 100, "验证完成")
+            send_progress("complete", 100, "更新完成，即将重启...")
+        else
+            error("更新脚本创建失败")
+            return false
+        end
+        return true
+    end
+end
+
+-- 修改 perform_update 函数中的 Windows 处理部分
 function perform_update(params)
     local total_start = get_time()
     -- 获取参数
@@ -435,7 +781,9 @@ function perform_update(params)
     -- 如果是 macOS，先处理新版本的隔离属性
     if not is_windows() then
         log(string.format("移除新版本的隔离属性: %s", new_version))
-        remove_quarantine(new_version)
+        if not remove_quarantine(new_version) then
+            error("移除新版本隔离属性失败")
+        end
     end
 
     send_progress("precheck", 100, "环境检查完成")
@@ -494,38 +842,7 @@ function perform_update(params)
     end
 
     if is_windows() then
-        -- Windows 平台使用批处理脚本更新
-        send_progress("install", 0, "准备安装新版本...")
-        
-        local batch_start = get_time()
-        send_progress("install", 20, "正在创建更新脚本...")
-        local batch_file = create_update_batch(new_version, target_path, backup_file)
-        log_time(batch_start, "创建批处理")
-        
-        -- 启动批处理
-        send_progress("install", 40, "正在准备重启程序...")
-        local start_start = get_time()
-        local cmd = string.format('powershell -Command "Start-Process -FilePath \'%s\' -WindowStyle Hidden"', batch_file)
-        local success = os_execute(cmd)
-        log_time(start_start, "启动批处理")
-        
-        if not success then
-            error("启动更新脚本失败")
-            return false
-        end
-        
-        send_progress("install", 80, "更新脚本已启动...")
-        log("更新脚本已创建并启动，程序即将重启...")
-        
-        -- 验证更新脚本
-        send_progress("verify", 0, "正在验证更新脚本...")
-        if check_file_exists(batch_file) then
-            send_progress("verify", 100, "验证完成")
-            send_progress("complete", 100, "更新完成，即将重启...")
-        else
-            error("更新脚本创建失败")
-            return false
-        end
+        return perform_windows_update(target_path, new_version, backup_path, backup_file, app_root)
     else
         -- macOS 平台直接更新
         send_progress("install", 0, "准备安装新版本...")
@@ -561,9 +878,26 @@ function perform_update(params)
 
         -- 验证安装
         send_progress("verify", 0, "开始验证...")
-        -- 这里可以添加验证逻辑
+        
+        if not is_windows() then
+            -- 验证隔离属性是否已清除
+            if check_quarantine(target_path) then
+                log_message("错误: 仍存在隔离属性，准备回滚...")
+                send_progress("verify", 50, "发现问题，准备回滚...")
+                
+                -- 删除更新后的文件
+                remove_files(target_path)
+                
+                -- 恢复备份
+                os.execute(string.format('tar -xzf "%s" -C "/"', backup_file))
+                
+                send_progress("verify", 100, "已回滚到备份版本")
+                error("更新失败: 无法完全移除隔离属性")
+                return false
+            end
+        end
+        
         send_progress("verify", 100, "验证完成")
-
         log("更新完成")
         send_progress("complete", 100, "更新完成")
     end

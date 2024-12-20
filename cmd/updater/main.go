@@ -5,6 +5,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -44,8 +45,41 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 如果提供了管道路径，说明是提权后的进程
+	// 创建根 context 用于管理所有协程
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // 确保在主函数退出时取消所有协程
+
+	// 添加自检测机制
 	if *pipePath != "" {
+		// 这是提权后的进程
+		go func() {
+			// 每30秒检查一次父进程
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+
+			ppid := os.Getppid()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					// 检查父进程是否还存在
+					if _, err := os.FindProcess(ppid); err != nil {
+						log.Printf("父进程已退出，更新助手即将退出")
+						cancel() // 取消所有协程
+						os.Exit(1)
+					}
+
+					// 检查更新是否已完成
+					if _, err := os.Stat(*updateFile); err != nil {
+						log.Printf("更新文件已不存在，更新助手即将退出")
+						cancel() // 取消所有协程
+						os.Exit(0)
+					}
+				}
+			}
+		}()
+
 		// 打开命名管道写入端
 		pipe, err := os.OpenFile(*pipePath, os.O_WRONLY, os.ModeNamedPipe)
 		if err != nil {
@@ -56,13 +90,14 @@ func main() {
 		os.Stdout = pipe
 	}
 
-	if err := runUpdate(*updateFile); err != nil {
+	// 运行更新，传入 context
+	if err := runUpdate(ctx, *updateFile); err != nil {
 		log.Printf("更新失败: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func runUpdate(updateFile string) error {
+func runUpdate(ctx context.Context, updateFile string) error {
 	log.Printf("读取更新信息文件: %s", updateFile)
 	info, err := readUpdateInfo(updateFile)
 	if err != nil {
@@ -79,9 +114,17 @@ func runUpdate(updateFile string) error {
 	log.Printf("等待原应用退出...")
 	time.Sleep(2 * time.Second)
 
+	// 在执行更新脚本前检查 context 是否已取消
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		// 继续执行
+	}
+
 	// 执行 Lua 更新脚本
 	log.Printf("开始执行更新脚本...")
-	if err := executeLuaScript(info); err != nil {
+	if err := executeLuaScript(ctx, info); err != nil {
 		return fmt.Errorf("执行更新脚本失败: %v", err)
 	}
 
@@ -95,7 +138,7 @@ func runUpdate(updateFile string) error {
 	return nil
 }
 
-func executeLuaScript(info *UpdateInfo) error {
+func executeLuaScript(ctx context.Context, info *UpdateInfo) error {
 	log.Printf("验证更新信息...")
 	// 获取真实的应用路径
 	appRoot := getAppRoot(info.AppPath)
@@ -145,6 +188,22 @@ func executeLuaScript(info *UpdateInfo) error {
 		return 0
 	}))
 
+	// 在执行 Lua 脚本期间定期检查 context
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				L.Close() // 强制关闭 Lua 状态
+				return
+			case <-ticker.C:
+				// 继续检查
+			}
+		}
+	}()
+
 	return L.CallByParam(lua.P{
 		Fn:      L.GetGlobal("perform_update"),
 		NRet:    0,
@@ -172,14 +231,26 @@ func requestPrivileges(updateFile string) error {
 		return fmt.Errorf("获取可执行文件路径失败: %v", err)
 	}
 
-	// 创建命名管道
+	// 创建命名管道前先检查并清理
 	pipePath := filepath.Join(filepath.Dir(updateFile), "updater.pipe")
+	if _, err := os.Stat(pipePath); err == nil {
+		// 管道已存在，先尝试删除
+		if err := os.Remove(pipePath); err != nil {
+			log.Printf("警告: 清理旧管道失败: %v", err)
+			// 继续执行，因为可能是权限问题，新建时会用新的权限
+		}
+	}
+
+	// 创建命名管道
 	if err := syscall.Mkfifo(pipePath, 0666); err != nil {
 		return fmt.Errorf("创建命名管道失败: %v", err)
 	}
 	defer os.Remove(pipePath)
 
-	// 启动一个 goroutine 来读取管道
+	// 启动管道监控
+	pipeCtx, pipeCancel := context.WithCancel(context.Background())
+	defer pipeCancel()
+
 	go func() {
 		pipe, err := os.OpenFile(pipePath, os.O_RDONLY, os.ModeNamedPipe)
 		if err != nil {
@@ -188,9 +259,28 @@ func requestPrivileges(updateFile string) error {
 		}
 		defer pipe.Close()
 
+		// 创建一个定时器用于检测管道是否活跃
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+
 		scanner := bufio.NewScanner(pipe)
-		for scanner.Scan() {
-			fmt.Println(scanner.Text()) // 直接输出到标准输出
+		for {
+			select {
+			case <-pipeCtx.Done():
+				return
+			case <-ticker.C:
+				// 如果30秒没有数据，认为可能出现问题
+				log.Printf("警告: 管道30秒未收到数据")
+			default:
+				if !scanner.Scan() {
+					if err := scanner.Err(); err != nil {
+						log.Printf("读取管道错误: %v", err)
+					}
+					return
+				}
+				fmt.Println(scanner.Text())
+				ticker.Reset(30 * time.Second) // 重置定时器
+			}
 		}
 	}()
 
