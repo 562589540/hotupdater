@@ -2,7 +2,7 @@
 local g_config = {
     windows_updater = {
         use_gui = false,  -- 是否使用GUI更新助手
-        updater_path = "updater.exe"  -- 更新助手的相对路径
+        updater_path = "updater.exe"  -- 更新助手的主执行文件相对路径
     }
 }
 
@@ -100,80 +100,6 @@ local function mkdir(path)
     else
         return os.execute(string.format('mkdir -p "%s"', path))
     end
-end
-
-local function remove_if_exists(path)
-    if check_file_exists(path) then
-        os.remove(path)
-        -- 如果是目录，使用 rmdir
-        if not check_file_exists(path) then
-            return true
-        end
-        -- 在 macOS 上使用 rm -rf 命令
-        if package.config:sub(1,1) == '/' then
-            os.execute(string.format('rm -rf "%s"', path))
-        end
-    end
-end
-
-local function fix_permissions(path)
-    if package.config:sub(1,1) == '/' then  -- Unix-like systems
-        os.execute(string.format('chmod -R 755 "%s"', path))
-        -- 特别处理 MacOS 下的可执行文件
-        local macosPath = path .. "/Contents/MacOS/*"
-        os.execute(string.format('chmod +x "%s"', macosPath))
-    end
-end
-
-local function get_app_root(path)
-    -- 查找第一个 .app 的位置（从左到右）
-    local app_index = string.find(path, ".app/")
-    if app_index then
-        -- 获取到第一个 .app 的完整路径
-        local app_path = string.sub(path, 1, app_index + 3)
-        -- 检查是否是有效的应用包路径
-        if check_file_exists(app_path .. "/Contents/MacOS") then
-            return app_path
-        end
-    end
-    return path
-end
-
-local function backup_app(current_path, backup_path)
-    -- 获取实际的应用根目录
-    current_path = get_app_root(current_path)
-    if not check_file_exists(current_path) then
-        error("当前应用不存在: " .. current_path)
-    end
-    
-    -- 先删除已存在的备份
-    remove_if_exists(backup_path)
-    
-    -- 备份当前应用
-    local success, err = os.rename(current_path, backup_path)
-    if not success then
-        error("备份失败: " .. (err or "未知错误"))
-    end
-end
-
-local function replace_app(new_app, current_path)
-    -- 获取实际的应用根目录
-    current_path = get_app_root(current_path)
-    if not check_file_exists(new_app) then
-        error("新版本不存在: " .. new_app)
-    end
-    
-    -- 确保目标路径不存在
-    remove_if_exists(current_path)
-    
-    -- 替换应用
-    local success, err = os.rename(new_app, current_path)
-    if not success then
-        error("替换失败: " .. (err or "未知错误"))
-    end
-    
-    -- 修复权限
-    fix_permissions(current_path)
 end
 
 -- 添加时间记录函数
@@ -291,54 +217,22 @@ end
 local function remove_files(path)
     if is_windows() then
         -- 检查文件是否存在
-        local check_cmd = string.format('Test-Path "%s"', path)
-        log("检查待删除文件命令: " .. check_cmd)
-        local exists = os_execute(check_cmd)
-        log("待删除文件检查结果: " .. tostring(exists))
-
-        if not exists then
-            log("文件不存在，无需删除")
+        if not check_file_exists(path) then
+            log("文件不存在，无需删除: " .. path)
             return true
         end
 
-        -- 先尝试关闭所有文件句柄
-        local close_cmd = string.format([[
-            powershell -Command "
-                Get-Process | ForEach-Object {
-                    $_.Modules | Where-Object {$_.FileName -eq '%s'} | ForEach-Object {
-                        $_.Process.Kill()
-                    }
-                }
-            "]], path)
-        log("执行关闭进程命令: " .. close_cmd)
-        os_execute(close_cmd)
+        -- 先尝试关闭进程
+        local taskkill_cmd = string.format('taskkill /F /IM "%s" >nul 2>&1', path:match("([^\\]+)$"))
+        os_execute(taskkill_cmd)
 
-        -- Windows 下删除文件
-        local cmd = string.format('Remove-Item -Path "%s" -Force', path)
-        log("执行删除命令: " .. cmd)
+        -- 删除文件
+        local cmd = string.format('del /F /Q "%s" >nul 2>&1', path)
         local success = os_execute(cmd)
-        log("删除命令执行结果: " .. tostring(success))
 
-        if not success then
-            -- 如果普通删除失败，尝试使用 taskkill
-            local taskkill_cmd = string.format('taskkill /F /IM "%s"', path:match("([^\\]+)$"))
-            log("执行强制结束进程命令: " .. taskkill_cmd)
-            os_execute(taskkill_cmd)
-            
-            -- 再次尝试删除
-            log("重试删除命令")
-            success = os_execute(cmd)
-            log("重试删除结果: " .. tostring(success))
-        end
-
-        -- 验证文件是否已删除
-        local verify_cmd = string.format('Test-Path "%s"', path)
-        log("验证删除结果命令: " .. verify_cmd)
-        local still_exists = os_execute(verify_cmd)
-        log("文件是否仍然存在: " .. tostring(still_exists))
-
-        if still_exists then
-            log("删除失败，文件仍然存在")
+        -- 验证删除结果
+        if check_file_exists(path) then
+            log("删除失败，文件仍然存在: " .. path)
             return false
         end
 
@@ -669,7 +563,21 @@ end
 
 -- Windows更新处理函数
 local function perform_windows_update(target_path, new_version, backup_path, backup_file, app_root)
+    -- 检查是否启用并存在更新助手
+    local use_gui = false
     if g_config.windows_updater.use_gui then
+        local updater_path = app_root .. path_sep .. g_config.windows_updater.updater_path
+        if check_file_exists(updater_path) then
+            use_gui = true
+            log("找到更新助手: " .. updater_path)
+        else
+            log("更新助手未找到: " .. updater_path .. "，将使用批处理模式")
+        end
+    else
+        log("更新助手未启用，使用批处理模式")
+    end
+
+    if use_gui then
         -- 使用GUI更新助手
         send_progress("install", 0, "准备安装新版本...")
         
