@@ -142,7 +142,7 @@ type UpdateProgress struct {
 1. 确保更新目录具有适当的写入权限
 2. 在 macOS 上更新 .app 包时需要特别注意权限问题
 3. 建议在更新前进行版本检查和完整性验证
-4. 更新失败时会自动���滚到备份版本
+4. 更新失败时会自动回滚到备份版本
 5. lua 脚本路径在不同平台下的相对路径基准不同
 
 ## 贡献
@@ -200,7 +200,7 @@ chmod 644 "$RESOURCES_DIR/update.lua"
 - 示例: `ScriptPath: "./update.lua"` 指向 `/Applications/YourApp.app/Contents/Resources/update.lua`
 
 #### Windows
-- 脚本相对路径: 相对于主程��执行文件
+- 脚本相对路径: 相对于主程序执行文件
 - 示例: `ScriptPath: "./update.lua"` 指向与可执行文件同级目录
 ```
 C:/path/to/

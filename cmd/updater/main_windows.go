@@ -23,10 +23,12 @@ import (
 )
 
 type UpdateInfo struct {
-	AppPath    string `json:"app_path"`
-	NewVersion string `json:"new_version"`
-	BackupPath string `json:"backup_path"`
-	BackupFile string `json:"backup_file"`
+	AppPath        string `json:"app_path"`
+	NewVersion     string `json:"new_version"`
+	BackupPath     string `json:"backup_path"`
+	BackupFile     string `json:"backup_file"`
+	CurrentVersion string `json:"current_version"`
+	UpdateVersion  string `json:"update_version"`
 }
 
 type UpdaterWindow struct {
@@ -55,6 +57,7 @@ const (
 
 var (
 	enumResourceNames = syscall.NewLazyDLL("kernel32.dll").NewProc("EnumResourceNamesW")
+	logFilePath       string
 )
 
 func EnumResourceNames(hModule win.HMODULE, lpszType uintptr, lpEnumFunc uintptr, lParam uintptr) bool {
@@ -67,9 +70,21 @@ func EnumResourceNames(hModule win.HMODULE, lpszType uintptr, lpEnumFunc uintptr
 	return ret != 0
 }
 
+func init() {
+	// 设置UTF-8编码
+	SetUTF8Encoding()
+
+	// 初始化日志文件路径
+	execDir, err := filepath.Abs(filepath.Dir(os.Args[0]))
+	if err != nil {
+		execDir = "."
+	}
+	logFilePath = filepath.Join(execDir, "updater.log")
+}
+
 func main() {
 	// 设置日志文件
-	logFile, err := os.OpenFile("updater.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		log.Fatal("无法创建日志文件: ", err)
 	}
@@ -112,7 +127,7 @@ func main() {
 	hInstance := win.GetModuleHandle(nil)
 	callback := func(h win.HMODULE, t, name uintptr) uintptr {
 		icons = append(icons, uint16(name))
-		log.Printf("找到图标资源: %d", uint16(name))
+		//log.Printf("找到图标资源: %d", uint16(name))
 		return 1 // 继续枚举
 	}
 
@@ -123,7 +138,7 @@ func main() {
 		enumProc,
 		0,
 	)
-	log.Printf("枚举到的图标资源: %v", icons)
+	//log.Printf("枚举到的图标资源: %v", icons)
 
 	// 使用找到的资源 ID 加载图标
 	var icon *walk.Icon
@@ -209,7 +224,7 @@ func main() {
 		hdc := win.GetDC(0)
 		dpiX := float64(win.GetDeviceCaps(hdc, win.LOGPIXELSX)) / 96.0
 		win.ReleaseDC(0, hdc)
-		log.Printf("DPI 缩放比例: %.2f", dpiX)
+		//log.Printf("DPI 缩放比例: %.2f", dpiX)
 
 		// 3. 获取主显示器工作区
 		var rect win.RECT
@@ -218,13 +233,13 @@ func main() {
 			x := rect.Left + (rect.Right-rect.Left-int32(float64(WINDOW_WIDTH)*dpiX))/2
 			y := rect.Top + (rect.Bottom-rect.Top-int32(float64(WINDOW_HEIGHT)*dpiX))/2
 
-			log.Printf("计算的窗口位置: x=%d, y=%d", x, y)
+			//log.Printf("计算的窗口位置: x=%d, y=%d", x, y)
 
 			// 4. 设置窗口位置和大小
 			if !win.SetWindowPos(updater.Handle(), 0,
 				x, y, int32(WINDOW_WIDTH), int32(WINDOW_HEIGHT),
 				win.SWP_NOZORDER|win.SWP_NOACTIVATE|win.SWP_FRAMECHANGED) {
-				log.Printf("SetWindowPos失败，错误码: %d", win.GetLastError())
+				//log.Printf("SetWindowPos失败，错误码: %d", win.GetLastError())
 			}
 		}
 
@@ -243,31 +258,28 @@ func main() {
 	// 在新协程中执行更新
 	go func() {
 		log.Println("开始执行新...")
+		// 更新版本
 		if err := performUpdate(info, &updater); err != nil {
 			log.Printf("更新失败: %v", err)
-			updater.SetStatus("更新失败: " + err.Error())
-			time.Sleep(3 * time.Second)
-			updater.Close()
-			os.Exit(1)
+			updater.SetStatus("更新失败, 详细请检查日志: " + logFilePath)
+			return
 		}
 		log.Println("更新完成")
 		updater.SetStatus("更新完成！")
+
+		//删除新版本
+		os.Remove(info.NewVersion)
+
+		//等待1秒确保文件句柄释放
 		time.Sleep(1 * time.Second)
 
 		// 启动新版本
 		log.Printf("准备启动新版本: %s", info.AppPath)
-		cmd := exec.Command("cmd", "/c", "start", "", info.AppPath)
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			HideWindow:    true,
-			CreationFlags: CREATE_NO_WINDOW,
-		}
-
+		cmd := RunCommand("cmd", "/c", "start", "", info.AppPath)
 		if err := cmd.Start(); err != nil {
 			log.Printf("启动新版本失败: %v", err)
-			updater.SetStatus("启动新版本失败！")
-			time.Sleep(2 * time.Second)
-			updater.Close()
-			os.Exit(1)
+			updater.SetStatus("启动新版本失败, 详细请检查日志: " + logFilePath)
+			return
 		}
 
 		// 等待一段时间确保程序启动
@@ -279,10 +291,8 @@ func main() {
 			updater.Close()
 		} else {
 			log.Println("新版本启动失败")
-			updater.SetStatus("新版本启动失败")
-			time.Sleep(3 * time.Second)
-			updater.Close()
-			os.Exit(1)
+			updater.SetStatus("新版本启动失败, 详细请检查日志: " + logFilePath)
+			return
 		}
 	}()
 
@@ -316,7 +326,7 @@ func performUpdate(info UpdateInfo, updater *UpdaterWindow) error {
 	// 等待原程序退出
 	updater.SetStatus("等待程序退出...")
 	processName := filepath.Base(info.AppPath)
-	log.Printf("��待进程退出: %s", processName)
+	log.Printf("等待进程退出: %s", processName)
 
 	if err := waitProcessExit(processName); err != nil {
 		return err
@@ -329,7 +339,11 @@ func performUpdate(info UpdateInfo, updater *UpdaterWindow) error {
 	if backupFile == "" {
 		// 如果没有提供备份文件路径，创建新的备份
 		timestamp := time.Now().Format("20060102_150405")
-		backupFile = filepath.Join(info.BackupPath, fmt.Sprintf("backup_%s.exe", timestamp))
+		if info.CurrentVersion != "" {
+			backupFile = filepath.Join(info.BackupPath, fmt.Sprintf("backup_%s_%s.exe", info.CurrentVersion, timestamp))
+		} else {
+			backupFile = filepath.Join(info.BackupPath, fmt.Sprintf("backup_%s.exe", timestamp))
+		}
 	}
 
 	// 检查备份文件
@@ -404,11 +418,7 @@ func performUpdate(info UpdateInfo, updater *UpdaterWindow) error {
 }
 
 func isProcessRunning(processName string) bool {
-	cmd := exec.Command("tasklist", "/FI", fmt.Sprintf("IMAGENAME eq %s", processName), "/NH", "/FO", "CSV")
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow:    true,
-		CreationFlags: CREATE_NO_WINDOW,
-	}
+	cmd := RunCommand("tasklist", "/FI", fmt.Sprintf("IMAGENAME eq %s", processName), "/NH", "/FO", "CSV")
 	output, err := cmd.Output()
 	if err != nil {
 		log.Printf("检查进程状态失败: %v", err)
@@ -427,11 +437,7 @@ func isProcessRunning(processName string) bool {
 }
 
 func killProcess(processName string) error {
-	cmd := exec.Command("taskkill", "/F", "/IM", processName)
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow:    true,
-		CreationFlags: CREATE_NO_WINDOW,
-	}
+	cmd := RunCommand("taskkill", "/F", "/IM", processName)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("终止进程失败: %v (输出: %s)", err, string(output))
 	}
@@ -479,13 +485,25 @@ func waitProcessExit(processName string) error {
 }
 
 func copyFile(src, dst string) error {
-	cmd := exec.Command("cmd", "/c", "copy", "/Y", src, dst)
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow:    true,
-		CreationFlags: CREATE_NO_WINDOW,
-	}
+	cmd := RunCommand("cmd", "/c", "copy", "/Y", src, dst)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("复制文件失败: %v (输出: %s)", err, string(output))
 	}
 	return nil
+}
+
+func SetUTF8Encoding() {
+	cmd := RunCommand("cmd", "/C", "chcp 65001 >nul")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	_ = cmd.Run()
+}
+
+func RunCommand(name string, arg ...string) *exec.Cmd {
+	cmd := exec.Command(name, arg...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow:    true,
+		CreationFlags: 0x08000000,
+	}
+	return cmd
 }

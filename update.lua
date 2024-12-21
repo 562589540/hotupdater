@@ -1,8 +1,18 @@
+-- 检测操作系统类型
+local function is_windows()
+    return package.config:sub(1,1) == '\\'
+end
+
+
+-- 路径分隔符
+local path_sep = is_windows() and '\\' or '/'
+
+
 -- 全局配置
 local g_config = {
     windows_updater = {
         use_gui = false,  -- 是否使用GUI更新助手
-        updater_path = "updater.exe"  -- 更新助手的主执行文件相对路径
+        updater_path = "hotupdater" .. path_sep .. "updater.exe"  -- 更新助手的主执行文件相对路径
     }
 }
 
@@ -11,13 +21,6 @@ local g_update_path = nil
 local g_write_log_file = false  -- 控制是否写入日志文件
 
 
--- 检测操作系统类型
-local function is_windows()
-    return package.config:sub(1,1) == '\\'
-end
-
--- 路径分隔符
-local path_sep = is_windows() and '\\' or '/'
 
 -- Windows 特定的函数
 local function win_hide_window(cmd)
@@ -562,7 +565,7 @@ function send_progress(phase, percentage, detail)
 end
 
 -- Windows更新处理函数
-local function perform_windows_update(target_path, new_version, backup_path, backup_file, app_root)
+local function perform_windows_update(target_path, new_version, backup_path, backup_file, app_root, current_version, update_version)
     -- 检查是否启用并存在更新助手
     local use_gui = false
     if g_config.windows_updater.use_gui then
@@ -588,11 +591,15 @@ local function perform_windows_update(target_path, new_version, backup_path, bac
     "app_path": "%s",
     "new_version": "%s",
     "backup_path": "%s",
-    "backup_file": "%s"
+    "backup_file": "%s",
+    "current_version": "%s",
+    "update_version": "%s"
 }]], target_path:gsub("\\", "\\\\"), 
     new_version:gsub("\\", "\\\\"), 
     backup_path:gsub("\\", "\\\\"), 
-    backup_file:gsub("\\", "\\\\"))
+    backup_file:gsub("\\", "\\\\"),
+    current_version:gsub("\\", "\\\\"),
+    update_version:gsub("\\", "\\\\"))
 
         -- 写入文件
         local file = io.open(info_file, "w")
@@ -759,7 +766,7 @@ function perform_update(params)
     end
 
     if is_windows() then
-        return perform_windows_update(target_path, new_version, backup_path, backup_file, app_root)
+        return perform_windows_update(target_path, new_version, backup_path, backup_file, app_root, current_version, update_version)
     else
         -- macOS 平台直接更新
         send_progress("install", 0, "准备安装新版本...")
