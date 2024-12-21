@@ -42,12 +42,14 @@ func (w *WinUpdater) Update(newVersion string) error {
 
 	// 构建更新参数
 	params := map[string]string{
-		"app_path":    w.currentExe,
-		"new_version": newVersion,
-		"backup_path": w.config.BackupPath,
-		"update_path": w.config.UpdatePath,
-		"app_root":    filepath.Dir(w.currentExe), // Windows 使用可执行文件所在目录作为根目录
-		"script_path": w.config.ScriptPath,
+		"app_path":        w.currentExe,
+		"new_version":     newVersion,
+		"backup_path":     w.config.BackupPath,
+		"update_path":     w.config.UpdatePath,
+		"app_root":        filepath.Dir(w.currentExe), // Windows 使用可执行文件所在目录作为根目录
+		"script_path":     w.config.ScriptPath,
+		"current_version": w.config.CurrentVersion,
+		"update_version":  w.config.UpdateVersion,
 	}
 
 	// 执行更新脚本

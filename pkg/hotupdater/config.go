@@ -2,13 +2,15 @@ package hotupdater
 
 // Config 热更新配置
 type Config struct {
-	UpdatePath   string       // 更新文件存放路径
-	BackupPath   string       // 备份路径
-	ScriptPath   string       // Lua脚本路径
-	OnUpdate     func(error)  // 更新回调
-	Logger       Logger       // 日志接口
-	EventEmitter EventEmitter // 事件发送器
-	DownloadImpl DownloadImplementation
+	CurrentVersion string       //当前版本号
+	UpdateVersion  string       //更新版本号
+	UpdatePath     string       // 更新文件存放路径
+	BackupPath     string       // 备份路径
+	ScriptPath     string       // Lua脚本路径
+	OnUpdate       func(error)  // 更新回调
+	Logger         Logger       // 日志接口
+	EventEmitter   EventEmitter // 事件发送器
+	DownloadImpl   DownloadImplementation
 }
 
 // Logger 日志接口

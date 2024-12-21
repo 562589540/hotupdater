@@ -1,13 +1,37 @@
 @echo off
-chcp 65001
+chcp 65001 >nul
 echo 开始构建更新助手...
 
 :: 设置变量
 set UPDATER_PATH=resources
 set GOPATH_BIN=
+set MODULE_PATH=
 
 :: 获取 GOBIN 路径
 for /f "tokens=*" %%i in ('go env GOPATH') do set GOPATH_BIN=%%i\bin
+
+:: 检查 go.mod 是否存在
+if not exist "go.mod" (
+    echo 错误: 未找到 go.mod 文件
+    exit /b 1
+)
+
+:: 检查并安装依赖
+echo 安装依赖...
+go get github.com/lxn/walk
+go get github.com/lxn/win
+go get github.com/562589540/hotupdater/cmd/updater@latest
+
+:: 获取模块路径
+for /f "tokens=*" %%i in ('go mod download -json github.com/562589540/hotupdater ^| findstr "Dir"') do set MODULE_PATH=%%~i
+set MODULE_PATH=%MODULE_PATH:~10,-2%
+
+if "%MODULE_PATH%"=="" (
+    echo 错误: 无法获取模块路径
+    exit /b 1
+)
+
+echo 模块路径: %MODULE_PATH%
 
 :: 检查必要工具
 if not exist "%GOPATH_BIN%\rsrc.exe" (
@@ -19,48 +43,48 @@ if not exist "%GOPATH_BIN%\rsrc.exe" (
 if not exist "temp" mkdir temp
 cd temp
 
-:: 复制必要文件
-echo 复制资源文件...
-copy /Y "%GOPATH_BIN%\hotupdater\cmd\updater\updater.manifest" .\ >nul
-copy /Y "%GOPATH_BIN%\hotupdater\cmd\updater\updater.rc" .\ >nul
-
-:: 检查图标
-if exist "..\updater.ico" (
-    copy /Y "..\updater.ico" .\ >nul
-) else (
-    copy /Y "%GOPATH_BIN%\hotupdater\cmd\updater\updater.ico" .\ >nul
-)
-
-:: 生成资源文件
-echo 生成资源文件...
-"%GOPATH_BIN%\rsrc.exe" -manifest updater.manifest -ico updater.ico -o rsrc.syso
+:: 复制整个 updater 目录
+echo 复制源代码...
+xcopy /E /I /Y "%MODULE_PATH%\cmd\updater" updater >nul
 if errorlevel 1 (
-    echo 生成资源文件失败
+    echo 错误: 无法复制源代码
     cd ..
     rmdir /S /Q temp
     exit /b 1
 )
 
-:: 创建main.go
-echo 创建更新助手入口文件...
-echo package main > main.go
-echo. >> main.go
-echo import "github.com/562589540/hotupdater/cmd/updater" >> main.go
-echo. >> main.go
-echo func main() { >> main.go
-echo     updater.Main() >> main.go
-echo } >> main.go
+:: 检查并使用本地图标
+if exist "..\updater.ico" (
+    echo 使用本地图标...
+    copy /Y "..\updater.ico" updater\updater.ico >nul
+)
+
+:: 生成资源文件
+echo 生成资源文件...
+"%GOPATH_BIN%\rsrc.exe" -manifest updater\updater.manifest -ico updater\updater.ico -o updater\rsrc.syso
+if errorlevel 1 (
+    echo 错误: 生成资源文件失败
+    cd ..
+    rmdir /S /Q temp
+    exit /b 1
+)
 
 :: 编译更新助手
+cd updater
 echo 构建更新助手...
-go build -tags walk_use_cgo -ldflags="-H windowsgui" -o ..\%UPDATER_PATH%\updater.exe
+go build -tags walk_use_cgo -ldflags="-H windowsgui" -o ..\..\%UPDATER_PATH%\updater.exe
+if errorlevel 1 (
+    cd ..\..
+    rmdir /S /Q temp
+    exit /b 1
+)
 
-:: 清理临时文件
-cd ..
+:: 返回并清理
+cd ..\..
 rmdir /S /Q temp
 
-:: 创建资源目录（如果不存在）
-if not exist "%UPDATER_PATH%" mkdir "%UPDATER_PATH%"
-
 echo 构建完成！
-echo 更新助手已生成到 %UPDATER_PATH%\updater.exe 
+echo 更新助手已生成到 %UPDATER_PATH%\updater.exe
+
+:: 返回成功
+exit /b 0

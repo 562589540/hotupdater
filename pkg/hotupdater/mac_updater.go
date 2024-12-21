@@ -84,12 +84,14 @@ func (m *MacUpdater) Update(newVersion string) error {
 	m.sendLog("更新信息文件路径: %s", updateInfo)
 
 	params := map[string]string{
-		"app_path":    m.currentExe,
-		"new_version": newVersion,
-		"backup_path": m.config.BackupPath,
-		"update_path": m.config.UpdatePath,
-		"app_root":    appRoot,
-		"script_path": scriptPath,
+		"app_path":        m.currentExe,
+		"new_version":     newVersion, //更新版本文件路径
+		"backup_path":     m.config.BackupPath,
+		"update_path":     m.config.UpdatePath,
+		"app_root":        appRoot,
+		"script_path":     scriptPath,
+		"current_version": m.config.CurrentVersion,
+		"update_version":  m.config.UpdateVersion,
 	}
 
 	if err := m.helper.writeUpdateInfo(updateInfo, params); err != nil {

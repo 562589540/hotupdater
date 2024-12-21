@@ -26,12 +26,14 @@ func init() {
 }
 
 type UpdateInfo struct {
-	AppPath    string `json:"app_path"`
-	NewVersion string `json:"new_version"`
-	ScriptPath string `json:"script_path"`
-	BackupPath string `json:"backup_path"`
-	UpdatePath string `json:"update_path"`
-	DoneFile   string `json:"done_file"`
+	AppPath        string `json:"app_path"`
+	NewVersion     string `json:"new_version"`
+	BackupPath     string `json:"backup_path"`
+	ScriptPath     string `json:"script_path"`
+	AppRoot        string `json:"app_root"`
+	UpdatePath     string `json:"update_path"`
+	CurrentVersion string `json:"current_version"`
+	UpdateVersion  string `json:"update_version"`
 }
 
 func main() {
@@ -167,11 +169,13 @@ func executeLuaScript(ctx context.Context, info *UpdateInfo) error {
 
 	// 构建参数
 	params := map[string]string{
-		"app_path":    info.AppPath,
-		"new_version": info.NewVersion,
-		"backup_path": info.BackupPath,
-		"update_path": info.UpdatePath,
-		"app_root":    appRoot,
+		"app_path":        info.AppPath,
+		"new_version":     info.NewVersion,
+		"backup_path":     info.BackupPath,
+		"update_path":     info.UpdatePath,
+		"app_root":        appRoot,
+		"current_version": info.CurrentVersion,
+		"update_version":  info.UpdateVersion,
 	}
 
 	log.Printf("调用更新函数...")

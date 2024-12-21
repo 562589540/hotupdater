@@ -667,6 +667,8 @@ function perform_update(params)
     local backup_path = params.backup_path
     local update_path = params.update_path
     local app_root = params.app_root
+    local current_version = params.current_version
+    local update_version = params.update_version
 
     -- 设置全局更新路径
     g_update_path = update_path
@@ -680,6 +682,8 @@ function perform_update(params)
     log(string.format("备份路径: %s", backup_path))
     log(string.format("更新路径: %s", update_path))
     log(string.format("应用根目录: %s", app_root))
+    log(string.format("当前版本: %s", current_version))
+    log(string.format("更新版本: %s", update_version))
 
     send_progress("precheck", 50, "正在检查路径...")
 
@@ -710,7 +714,12 @@ function perform_update(params)
     end
 
     -- 执行备份
-    local backup_name = os.date("backup_%Y%m%d_%H%M%S")
+    local backup_name
+    if current_version and current_version ~= "" then
+        backup_name = string.format("backup_%s_%s", current_version, os.date("%Y%m%d_%H%M%S"))
+    else
+        backup_name = os.date("backup_%Y%m%d_%H%M%S")
+    end
     local backup_file
     if is_windows() then
         backup_file = backup_path .. path_sep .. backup_name .. ".exe"
