@@ -1,5 +1,10 @@
+:: windows更新助手 外部调用本库打包构建脚本案例
+
 @echo off
 chcp 65001 >nul
+:: 切换到项目根目录
+cd /d "%~dp0\.."
+
 echo 开始构建更新助手...
 
 :: 设置变量
@@ -53,7 +58,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-:: 检查并使用本地图标
+:: 检查并使用本地图标 你的图标
 if exist "..\updater.ico" (
     echo 使用本地图标...
     copy /Y "..\updater.ico" updater\updater.ico >nul

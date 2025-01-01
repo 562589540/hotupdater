@@ -60,6 +60,7 @@ var (
 	logFilePath       string
 )
 
+// 枚举资源名称
 func EnumResourceNames(hModule win.HMODULE, lpszType uintptr, lpEnumFunc uintptr, lParam uintptr) bool {
 	ret, _, _ := enumResourceNames.Call(
 		uintptr(hModule),
@@ -348,15 +349,18 @@ func performUpdate(info UpdateInfo, updater *UpdaterWindow) error {
 
 	// 检查备份文件
 	if _, err := os.Stat(backupFile); err != nil {
+		log.Printf("传入的备份文件不存在，尝试创建: %s", backupFile)
 		// 如果备文件不存在，创建备份
 		updater.SetStatus("创建备份...")
 		if err := copyFile(info.AppPath, backupFile); err != nil {
+			log.Printf("创建备份失败: %v", err)
 			return fmt.Errorf("创建备份失败: %v", err)
 		}
 		log.Printf("已创建备份: %s", backupFile)
 	}
 	updater.SetProgress(40)
 
+	log.Printf("删除旧版本: %s", info.AppPath)
 	// 删除旧版本前先尝试修改权限
 	updater.SetStatus("删除旧版本...")
 	if err := os.Chmod(info.AppPath, 0666); err != nil {
@@ -381,7 +385,8 @@ func performUpdate(info UpdateInfo, updater *UpdaterWindow) error {
 	// 复制新版本
 	updater.SetStatus("安装新版本...")
 	if err := copyFile(info.NewVersion, info.AppPath); err != nil {
-		// 恢复备
+		// 恢复备份
+		log.Printf("复制新版本失败，准备回滚到备份: %s", info.BackupFile)
 		updater.SetStatus("更新失败，正在恢复...")
 		if restoreErr := copyFile(info.BackupFile, info.AppPath); restoreErr != nil {
 			return fmt.Errorf("更新失败且无法恢复备份: %v", restoreErr)
@@ -417,6 +422,7 @@ func performUpdate(info UpdateInfo, updater *UpdaterWindow) error {
 	return nil
 }
 
+// 检查进程是否正在运行
 func isProcessRunning(processName string) bool {
 	cmd := RunCommand("tasklist", "/FI", fmt.Sprintf("IMAGENAME eq %s", processName), "/NH", "/FO", "CSV")
 	output, err := cmd.Output()
@@ -436,6 +442,7 @@ func isProcessRunning(processName string) bool {
 	return false
 }
 
+// 强制终止进程
 func killProcess(processName string) error {
 	cmd := RunCommand("taskkill", "/F", "/IM", processName)
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -444,6 +451,7 @@ func killProcess(processName string) error {
 	return nil
 }
 
+// 等待进程退出
 func waitProcessExit(processName string) error {
 	log.Printf("等待进程退出: %s", processName)
 
@@ -484,6 +492,7 @@ func waitProcessExit(processName string) error {
 	}
 }
 
+// 复制文件
 func copyFile(src, dst string) error {
 	cmd := RunCommand("cmd", "/c", "copy", "/Y", src, dst)
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -492,6 +501,7 @@ func copyFile(src, dst string) error {
 	return nil
 }
 
+// 设置UTF-8编码
 func SetUTF8Encoding() {
 	cmd := RunCommand("cmd", "/C", "chcp 65001 >nul")
 	cmd.Stdout = os.Stdout
@@ -499,6 +509,7 @@ func SetUTF8Encoding() {
 	_ = cmd.Run()
 }
 
+// 运行命令包装隐藏窗口
 func RunCommand(name string, arg ...string) *exec.Cmd {
 	cmd := exec.Command(name, arg...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{

@@ -1,6 +1,19 @@
 @echo off
 chcp 65001
+:: 切换到项目根目录
+cd /d "%~dp0\.."
+
 echo 开始构建...
+
+:: 复制并重命名图标文件
+echo 复制图标文件...
+if exist "icon.ico" (
+    if not exist "cmd\updater" mkdir "cmd\updater"
+    copy /Y "icon.ico" "cmd\updater\updater.ico"
+) else (
+    echo 错误: icon.ico 文件不存在
+    exit /b 1
+)
 
 :: 检查必要文件
 if not exist "cmd\updater\updater.manifest" (

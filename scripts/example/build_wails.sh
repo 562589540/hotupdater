@@ -1,5 +1,9 @@
 #!/bin/bash
 #wails mac 打包测试案例
+# 切换到项目根目录
+cd "$(dirname "$0")/.."
+
+
 # 设置变量
 APP_NAME="your_app_name"
 BUILD_DIR="build/bin"
