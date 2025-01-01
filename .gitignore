@@ -28,4 +28,6 @@ Thumbs.db
 *.log
 
 # 环境变量文件
-.env 
+.env
+
+.DS_Store
