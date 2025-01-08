@@ -1,4 +1,4 @@
-version=v1.0.4
-create_time=2025-01-01 15:00:51
-commit_id=929e0b685297fa895d15fd57d7b422e4ba02a89a
-tag_message=版本 v1.0.4
+version=v1.0.5
+create_time=2025-01-08 14:22:06
+commit_id=3298a34b58d45d0cf9ef374df22616774f1f3f07
+tag_message=版本 v1.0.5
