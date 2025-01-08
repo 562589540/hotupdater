@@ -11,6 +11,11 @@ HotUpdater 是一个用 Go 语言编写的应用程序热更新库，支持 Wind
 - 可自定义更新脚本
 - 提供日志记录接口
 - 支持自定义下载实现
+- 提供图形化恢复助手
+  - 支持备份版本管理和恢复
+  - 自动处理管理员权限
+  - 支持中文界面
+  - 提供详细的恢复日志
 
 ## 安装
 
@@ -242,6 +247,45 @@ config := hotupdater.Config{
 
 > **注意**: 建议使用绝对路径来避免不同平台的路径解析问题。如果必须使用相对路径，请注意 macOS 和 Windows 的基准路径差异。
 
+### Lua 配置说明
+
+#### Windows 更新助手配置
+在 `update.lua` 中，你可以通过全局配置来控制 Windows 更新助手的行为：
+
+```lua
+-- 全局配置
+local g_config = {
+    windows_updater = {
+        use_gui = true,  -- 是否使用GUI更新助手
+        updater_path = "hotupdater" .. path_sep .. "updater.exe"  -- 更新助手的主执行文件相对路径
+    }
+}
+```
+
+配置项说明：
+- `use_gui`: 布尔值，控制是否使用图形界面更新助手
+  - `true`: 使用带进度条的图形界面（推荐）
+  - `false`: 使用批处理 可能存在编码问题
+- `updater_path`: 更新助手可执行文件的相对路径
+  - 路径相对于主程序所在目录
+  - 使用 `path_sep` 确保跨平台兼容性
+
+推荐配置：
+```lua
+local g_config = {
+    windows_updater = {
+        use_gui = true,  -- 启用图形界面提供更好的用户体验
+        updater_path = "hotupdater" .. path_sep .. "updater.exe"
+    }
+}
+```
+
+使用图形界面更新助手的优势：
+1. 提供清晰的更新进度显示
+2. 支持中文等本地化界面
+3. 自动处理管理员权限申请
+4. 提供更友好的错误提示
+
 ## 构建说明
 
 ### macOS 构建步骤
@@ -289,7 +333,7 @@ wails build
 
 ## 更新日志
 
-### v0.1.0 (2023-12-21)
+### v0.1.0 (2024-12-21)
 - 初始版本发布
 - 基本功能实现:
   - Windows 和 macOS 平台支持
@@ -298,13 +342,21 @@ wails build
   - 可自定义更新脚本
   - 支持自定义下载实现
 
-### v0.1.1 (2023-12-21)
+### v0.1.1 (2024-12-21)
 - Windows 更新助手改进:
   - 添加窗口图标支持
   - 优化窗口显示效果，避免闪烁
   - 改进 DPI 缩放支持
   - 增强错误处理和日志记录
   - 优化进程等待和终止逻辑
+
+### v0.1.2 (2025-01-08)
+- Windows 平台改进:
+  - 修复更新助手中文编码显示问题
+  - 优化恢复助手的管理员权限请求逻辑
+  - 更新配置建议使用 GUI 更新助手提升用户体验
+  - 改进错误提示的本地化支持
+  - 增强进程权限检查机制
 
 ### 计划中的功能
 - [ ] 支持多语言界面
@@ -327,3 +379,69 @@ wails build
 2. 添加必要的测试用例
 3. 更新相关文档
 4. 在 PR 中详细描述改动
+
+### 恢复助手使用说明
+
+#### 配置文件
+恢复助手使用 JSON 格式的配置文件 `restore_config.json`：
+
+```json
+{
+    "app_path": "/Applications/YourApp.app",     // 应用程序路径
+    "backup_path": "/path/to/backup",            // 备份存储路径
+    "current_path": "/path/to/current/version"   // 当前版本路径（可选）
+}
+```
+
+配置项说明：
+- `app_path`: 应用程序路径
+  - Windows: 通常是 `.exe` 文件路径，如 `C:/Program Files/YourApp/app.exe`
+  - macOS: 通常是 `.app` 包路径，如 `/Applications/YourApp.app`
+- `backup_path`: 备份文件存储目录
+  - 建议使用绝对路径
+  - 确保该目录有足够的存储空间和写入权限
+- `current_path`: 当前版本路径（可选）
+  - 用于版本比较和更新检查
+
+#### 配置文件位置
+恢复助手会按以下顺序查找配置文件：
+1. 当前目录下的 `restore_config.json`
+2. 可执行文件所在目录的 `restore_config.json`
+3. 如果都未找到，将在可执行文件所在目录创建默认配置
+
+#### 目录结构示例
+
+##### Windows
+```
+C:/Program Files/YourApp/
+├── app.exe           # 主程序
+├── restore.exe       # 恢复助手
+├── restore_config.json
+└── backup/          # 备份目录
+    ├── backup_1.0.0_20240301_120000.exe
+    └── backup_1.0.1_20240302_150000.exe
+```
+
+##### macOS
+```
+/Applications/
+├── YourApp.app/     # 主程序
+└── YourApp_Restore.app/  # 恢复助手
+    └── Contents/
+        ├── MacOS/
+        │   └── restore
+        └── Resources/
+            └── restore_config.json
+
+/Users/username/Library/Application Support/YourApp/
+└── backup/         # 备份目录
+    ├── backup_1.0.0_20240301_120000.tar.gz
+    └── backup_1.0.1_20240302_150000.tar.gz
+```
+
+#### 使用建议
+1. 建议定期清理过旧的备份文件
+2. 恢复前确保目标应用已完全退出
+3. 在 Windows 上可能需要管理员权限
+4. 建议保留至少最近三个版本的备份
+5. 定期验证备份文件的完整性

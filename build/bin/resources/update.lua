@@ -11,7 +11,7 @@ local path_sep = is_windows() and '\\' or '/'
 -- 全局配置
 local g_config = {
     windows_updater = {
-        use_gui = true,  -- 是否使用GUI更新助手
+        use_gui = false,  -- 是否使用GUI更新助手
         updater_path = "hotupdater" .. path_sep .. "updater.exe"  -- 更新助手的主执行文件相对路径
     }
 }

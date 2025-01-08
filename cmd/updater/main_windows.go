@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 	"unsafe"
@@ -53,12 +52,28 @@ const (
 	// 资源类型常量
 	RT_ICON       uintptr = 3
 	RT_GROUP_ICON uintptr = 14
+
+	PROCESS_QUERY_INFORMATION = 0x0400
+	STILL_ACTIVE              = 259
 )
 
 var (
 	enumResourceNames = syscall.NewLazyDLL("kernel32.dll").NewProc("EnumResourceNamesW")
 	logFilePath       string
 )
+
+type PROCESSENTRY32 struct {
+	dwSize              uint32
+	cntUsage            uint32
+	th32ProcessID       uint32
+	th32DefaultHeapID   uintptr
+	th32ModuleID        uint32
+	cntThreads          uint32
+	th32ParentProcessID uint32
+	pcPriClassBase      int32
+	dwFlags             uint32
+	szExeFile           [260]uint16
+}
 
 // 枚举资源名称
 func EnumResourceNames(hModule win.HMODULE, lpszType uintptr, lpEnumFunc uintptr, lParam uintptr) bool {
@@ -84,8 +99,8 @@ func init() {
 }
 
 func main() {
-	// 设置日志文件
-	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	// 设置日志文件，每次启动时清空之前的日志
+	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
 	if err != nil {
 		log.Fatal("无法创建日志文件: ", err)
 	}
@@ -424,21 +439,42 @@ func performUpdate(info UpdateInfo, updater *UpdaterWindow) error {
 
 // 检查进程是否正在运行
 func isProcessRunning(processName string) bool {
-	cmd := RunCommand("tasklist", "/FI", fmt.Sprintf("IMAGENAME eq %s", processName), "/NH", "/FO", "CSV")
-	output, err := cmd.Output()
-	if err != nil {
-		log.Printf("检查进程状态失败: %v", err)
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	createSnapshot := kernel32.NewProc("CreateToolhelp32Snapshot")
+	process32First := kernel32.NewProc("Process32FirstW")
+	process32Next := kernel32.NewProc("Process32NextW")
+	closeHandle := kernel32.NewProc("CloseHandle")
+
+	handle, _, _ := createSnapshot.Call(0x2, 0) // TH32CS_SNAPPROCESS = 0x2
+	if handle == uintptr(syscall.InvalidHandle) {
+		log.Printf("创建进程快照失败")
+		return false
+	}
+	defer closeHandle.Call(handle)
+
+	var entry PROCESSENTRY32
+	entry.dwSize = uint32(unsafe.Sizeof(entry))
+
+	ret, _, _ := process32First.Call(handle, uintptr(unsafe.Pointer(&entry)))
+	if ret == 0 {
+		log.Printf("获取第一个进程失败")
 		return false
 	}
 
-	// 检查输出中是否包含进程名（完整匹配）
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		if strings.Contains(line, fmt.Sprintf(`"%s"`, processName)) {
-			log.Printf("找到进程: %s", line)
+	for {
+		name := syscall.UTF16ToString(entry.szExeFile[:])
+		if name == processName {
+			log.Printf("找到进程: %s", name)
 			return true
 		}
+
+		ret, _, _ := process32Next.Call(handle, uintptr(unsafe.Pointer(&entry)))
+		if ret == 0 {
+			break
+		}
 	}
+
+	log.Printf("未找到进程: %s", processName)
 	return false
 }
 

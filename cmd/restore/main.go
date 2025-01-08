@@ -50,7 +50,48 @@ var (
 	config      Config
 )
 
+func getAppSupportDir() string {
+	if runtime.GOOS == "darwin" {
+		// 对于 macOS，直接使用 .app 同级目录
+		return getExecutableDir()
+	}
+	// 其他系统直接返回空
+	return ""
+}
+
+func getExecutableDir() string {
+	if runtime.GOOS == "darwin" {
+		// 对于 macOS .app 包，尝试获取包内的实际路径
+		exe, err := os.Executable()
+		if err != nil {
+			return "."
+		}
+
+		// 检查是否在 .app 包内
+		if strings.Contains(exe, ".app/Contents/MacOS") {
+			// 获取 .app 包的父目录
+			appPath := exe
+			for strings.Contains(appPath, ".app/Contents/MacOS") {
+				appPath = filepath.Dir(appPath)
+			}
+			// 再往上两级：跳过 .app 和它的父目录
+			return filepath.Dir(filepath.Dir(appPath))
+		}
+		return filepath.Dir(exe)
+	}
+
+	// 其他系统直接返回可执行文件目录
+	execDir, err := filepath.Abs(filepath.Dir(os.Args[0]))
+	if err != nil {
+		return "."
+	}
+	return execDir
+}
+
 func init() {
+	getEnv()
+	// 设置命令行UTF-8编码
+	SetUTF8Encoding()
 	// 设置中文字体
 	fontPaths := findfont.List()
 	for _, path := range fontPaths {
@@ -61,12 +102,23 @@ func init() {
 	}
 
 	// 设置日志文件
-	execDir, err := filepath.Abs(filepath.Dir(os.Args[0]))
-	if err != nil {
-		execDir = "."
+	var logPath string
+	if runtime.GOOS == "darwin" {
+		// macOS: 将日志文件放在程序目录的 support 子目录中
+		supportDir := getAppSupportDir()
+		if supportDir != "" {
+			logPath = filepath.Join(supportDir, "restore.log")
+		} else {
+			// 如果获取支持目录失败，使用临时目录
+			logPath = filepath.Join(os.TempDir(), "restore.log")
+		}
+	} else {
+		// 其他系统保持原样
+		execDir := getExecutableDir()
+		logPath = filepath.Join(execDir, "restore.log")
 	}
-	logPath := filepath.Join(execDir, "restore.log")
-	logFile, err = os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		fmt.Printf("无法创建日志文件: %v\n", err)
 		os.Exit(1)
@@ -92,11 +144,19 @@ func init() {
 
 // 加载配置文件
 func loadConfig(path string) error {
-	// 尝试从多个位置加载配置文件
-	configPaths := []string{
-		path, // 当前目录
-		filepath.Join(filepath.Dir(os.Args[0]), "restore_config.json"), // 程序所在目录
-		filepath.Join(".", "restore_config.json"),                      // 工作目录
+	var configPaths []string
+	execDir := getExecutableDir()
+
+	if runtime.GOOS == "darwin" {
+		// macOS: 只搜索 .app 同级目录
+		configPaths = append(configPaths, filepath.Join(execDir, "restore_config.json"))
+	} else {
+		// 其他系统保持原有搜索路径
+		configPaths = []string{
+			path,
+			filepath.Join(filepath.Dir(os.Args[0]), "restore_config.json"),
+			filepath.Join(".", "restore_config.json"),
+		}
 	}
 
 	for _, configPath := range configPaths {
@@ -109,12 +169,12 @@ func loadConfig(path string) error {
 		}
 	}
 
-	// 果所有路径加载失败，创建默认配置
+	// 如果所有路径加载失败，创建默认配置
 	log.Printf("未找到配置文件，创建默认配置")
 
-	execDir := filepath.Dir(os.Args[0])
+	// 使用正确的目录创建默认配置
 	defaultConfig := Config{
-		AppPath:    getDefaultAppPath(execDir),
+		AppPath:    filepath.Join(execDir, "app"),
 		BackupPath: filepath.Join(execDir, "backup"),
 	}
 
@@ -123,13 +183,14 @@ func loadConfig(path string) error {
 		return fmt.Errorf("创建备份目录失败: %v", err)
 	}
 
-	// 存默认配置
+	// 保存默认配置
 	config = defaultConfig
 	configData, err := json.MarshalIndent(config, "", "    ")
 	if err != nil {
 		return fmt.Errorf("序列化默认配置失败: %v", err)
 	}
 
+	// 使用正确的目录保存配置文件
 	defaultConfigPath := filepath.Join(execDir, "restore_config.json")
 	if err := os.WriteFile(defaultConfigPath, configData, 0644); err != nil {
 		log.Printf("警告: 无法保存默认配置文件: %v", err)
@@ -152,42 +213,38 @@ func loadConfig(path string) error {
 	return nil
 }
 
-// 默认应用序路径
-func getDefaultAppPath(execDir string) string {
-	if runtime.GOOS == "windows" {
-		return filepath.Join(execDir, "app.exe")
-	}
-	// macOS
-	if runtime.GOOS == "darwin" {
-		return filepath.Join(execDir, "app")
-	}
-	// Linux
-	return filepath.Join(execDir, "app")
-}
-
 func main() {
 	defer logFile.Close()
 
 	log.Println("恢复助手启动...")
 
-	// 检���权限
+	// 检查权限
 	if !checkAdminPrivileges() {
 		log.Println("需要管理员权限，正在请求...")
 		if runtime.GOOS == "darwin" {
-			// macOS: 使用 osascript 请求权限并保持权限
-			cmd := RunCommand("osascript", "-e", `do shell script "echo '正在获取权限...'" with administrator privileges`)
+			// macOS: 使用 osascript 请求权限并执行当前程序
+			exe, err := os.Executable()
+			if err != nil {
+				log.Printf("获取程序路径失败: %v", err)
+				os.Exit(1)
+			}
+
+			// 构建带引号的命令，以处理路径中的空格
+			quotedPath := fmt.Sprintf(`"%s"`, exe)
+			cmd := RunCommand("osascript", "-e", fmt.Sprintf(`do shell script %s with administrator privileges`, quotedPath))
 			if err := cmd.Run(); err != nil {
 				log.Printf("请求管理员权限失败: %v", err)
 				os.Exit(1)
 			}
+			os.Exit(0) // 退出当前进程，新进程会以管理员权限启动
 		} else if runtime.GOOS == "windows" {
-			// Windows: 使用 vbs 脚本提权
+			// Windows 部分保持不变
 			if err := requestAdminPrivileges(); err != nil {
 				log.Printf("请求管理员权限失败: %v", err)
 				dialog.ShowError(fmt.Errorf("需要管理员权限才能运行此程序"), nil)
 				os.Exit(1)
 			}
-			os.Exit(0) // 退出当前进程，新进程会以管理员权限启动
+			os.Exit(0)
 		}
 	}
 
@@ -518,8 +575,8 @@ func performRestore(backup BackupInfo) {
 					container.NewPadded(resultContent),
 					func(viewLog bool) {
 						if viewLog {
-							// 打开日志件
-							logPath := filepath.Join(filepath.Dir(os.Args[0]), "restore.log")
+							// 打开日志文件
+							logPath := filepath.Join(getExecutableDir(), "restore.log")
 							if runtime.GOOS == "windows" {
 								exec.Command("notepad", logPath).Start()
 							} else {
@@ -623,74 +680,6 @@ func copyFile(src, dst string) error {
 		return fmt.Errorf("复制文件失败: %v", err)
 	}
 
-	return nil
-}
-
-// 检查进程是否在运行
-func isProcessRunning(processName string) bool {
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = RunCommand("tasklist", "/FI", fmt.Sprintf("IMAGENAME eq %s", processName), "/NH")
-	} else {
-		cmd = RunCommand("pgrep", processName)
-	}
-
-	output, err := cmd.Output()
-	if err != nil {
-		return false
-	}
-
-	if runtime.GOOS == "windows" {
-		return strings.Contains(string(output), processName)
-	}
-	return len(output) > 0
-}
-
-// 检查是否以管理员权限运行
-func checkAdminPrivileges() bool {
-	if runtime.GOOS == "windows" {
-		cmd := RunCommand("net", "session")
-		err := cmd.Run()
-		return err == nil
-	} else {
-		cmd := RunCommand("id", "-u")
-		output, err := cmd.Output()
-		if err != nil {
-			return false
-		}
-		return strings.TrimSpace(string(output)) == "0"
-	}
-}
-
-// 请求管理员权限
-func requestAdminPrivileges() error {
-	if runtime.GOOS == "windows" {
-		exe, err := os.Executable()
-		if err != nil {
-			return fmt.Errorf("获取程序路径失败: %v", err)
-		}
-
-		cwd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("获取工作目录失败: %v", err)
-		}
-
-		// 创建临时 vbs 脚本
-		vbsContent := fmt.Sprintf(`
-			Set UAC = CreateObject("Shell.Application")
-			UAC.ShellExecute "%s", "", "%s", "runas", 0
-		`, exe, cwd)
-
-		vbsPath := filepath.Join(os.TempDir(), "elevate.vbs")
-		if err := os.WriteFile(vbsPath, []byte(vbsContent), 0644); err != nil {
-			return fmt.Errorf("创建提权脚本失败: %v", err)
-		}
-		defer os.Remove(vbsPath)
-
-		// 执行 vbs 脚本
-		cmd := RunCommand("wscript", vbsPath)
-		return cmd.Run()
-	}
 	return nil
 }
 
