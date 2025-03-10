@@ -17,6 +17,8 @@ HotUpdater 是一个用 Go 语言编写的应用程序热更新库，支持 Wind
   - 支持中文界面
   - 提供详细的恢复日志
 
+wails案例: https://github.com/562589540/hotupdaterdemo
+
 ## 安装
 
 ```bash
